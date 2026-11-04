@@ -1,0 +1,19 @@
+{
+  "name": "edutools-cuteworld",
+  "private": true,
+  "type": "module",
+  "description": "ClassQuest: a real-time virtual classroom on a 2D map. Static site, no build step; this file only holds dev scripts.",
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "test": "node --test \"tests/*.test.js\"",
+    "test:rules": "npx firebase-tools emulators:exec --only database --project demo-cuteworld \"node --test \\\"tests/rules/*.test.js\\\"\"",
+    "test:e2e": "npx firebase-tools emulators:exec --only auth,database --project demo-cuteworld \"node tests/e2e/run.mjs\"",
+    "emulators": "npx firebase-tools emulators:start --only auth,database --project demo-cuteworld",
+    "build:maps": "node tools/build-maps.mjs"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
+    "firebase": "^13.1.0",
+    "puppeteer-core": "^24.0.0"
+  }
+}

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fff8ef">
+  <title>ClassQuest</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🎓%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main class="screen">
+    <div class="grid gap-5 w-full max-w-xl">
+      <header class="flex items-center justify-center gap-3">
+        <img id="heroMale" alt="" width="72" height="84">
+        <div class="text-center">
+          <h1 class="title">ClassQuest</h1>
+          <p class="muted">Virtual Classroom Grid</p>
+        </div>
+        <img id="heroFemale" alt="" width="72" height="84">
+      </header>
+
+      <div class="grid gap-4 sm:grid-cols-2">
+        <section class="card grid gap-3 content-start" aria-labelledby="studentHead">
+          <h2 id="studentHead" class="text-xl font-bold">I'm a student</h2>
+          <p class="muted">Type the code on the big screen, or scan its QR code.</p>
+          <form id="studentForm" class="grid gap-3" novalidate>
+            <label class="sr-only" for="code">Class code</label>
+            <input id="code" class="input code-input" maxlength="6" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="ABC234" inputmode="text">
+            <p id="codeError" class="error" role="alert" hidden></p>
+            <button class="btn primary big" type="submit">Join class</button>
+          </form>
+        </section>
+
+        <section class="card grid gap-3 content-start" aria-labelledby="teacherHead">
+          <h2 id="teacherHead" class="text-xl font-bold">I'm the teacher</h2>
+          <p class="muted">Open the big screen, show the QR code and run the class.</p>
+          <a class="btn mint big" href="admin.html">Start a class</a>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { avatarUrl, look } from './js/avatars.js';
+    import { isCode, normalizeCode } from './js/codes.js';
+
+    document.getElementById('heroMale').src = avatarUrl(look({ uid: 'hero-a', persona: 'male', color: 1 }));
+    document.getElementById('heroFemale').src = avatarUrl(look({ uid: 'hero-b', persona: 'female', color: 0 }));
+
+    const input = document.getElementById('code');
+    const error = document.getElementById('codeError');
+    document.getElementById('studentForm').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const code = normalizeCode(input.value);
+      if (!isCode(code)) {
+        error.textContent = 'The code has 6 letters and numbers, like ABC234.';
+        error.hidden = false;
+        input.focus();
+        return;
+      }
+      location.href = `student.html?room=${code}`;
+    });
+  </script>
+</body>
+</html>

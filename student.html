@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fff8ef">
+  <title>ClassQuest: join</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🎓%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="game student">
+  <canvas id="world" role="img" aria-label="The class map with everyone's characters"></canvas>
+
+  <div id="joy" class="joy-zone" hidden>
+    <div class="joy-base"><div class="joy-knob"></div></div>
+    <p id="joyHint" class="joy-hint">Touch and drag to walk</p>
+  </div>
+
+  <header id="hud" class="hud" hidden>
+    <div class="chip" id="meChip">
+      <img id="meAvatar" alt="" width="22" height="26">
+      <b id="meName"></b>
+      <span id="meGroup" class="badge" hidden></span>
+    </div>
+    <div class="hud-actions">
+      <span class="chip" id="envChip"></span>
+      <button id="btnSound" class="icon-btn" type="button" aria-label="Sound" aria-pressed="true">🔊</button>
+      <button id="btnBoard" class="icon-btn" type="button" aria-label="Leaderboard">🏆</button>
+      <button id="btnQuiz" class="icon-btn pulse" type="button" aria-label="Open the question" hidden>❓</button>
+    </div>
+  </header>
+
+  <form id="chatBar" class="chatbar card" hidden autocomplete="off">
+    <label id="chatWith" class="chat-with" for="chatInput"></label>
+    <div class="flex gap-2">
+      <input id="chatInput" class="input flex-1" maxlength="300" placeholder="Say something…" enterkeyhint="send" autocomplete="off">
+      <button class="btn primary" type="submit">Send</button>
+    </div>
+  </form>
+
+  <section id="join" class="screen">
+    <form id="joinForm" class="card join-card" novalidate>
+      <h1 class="title">ClassQuest</h1>
+      <p class="muted">Join your class and explore the map!</p>
+
+      <div id="codeRow" class="field" hidden>
+        <label for="code">Class code</label>
+        <input id="code" class="input code-input" maxlength="6" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="ABC234">
+      </div>
+      <div class="field">
+        <label for="name">Your name</label>
+        <input id="name" class="input" maxlength="20" autocomplete="nickname" placeholder="e.g. Sam">
+      </div>
+      <fieldset class="field">
+        <legend>Pick your character</legend>
+        <div class="persona-grid">
+          <button type="button" class="persona" data-persona="male" aria-pressed="false"><img alt="" width="72" height="84"><span>Male</span></button>
+          <button type="button" class="persona" data-persona="female" aria-pressed="false"><img alt="" width="72" height="84"><span>Female</span></button>
+        </div>
+      </fieldset>
+      <p id="joinError" class="error" role="alert" hidden></p>
+      <button id="joinBtn" class="btn primary big" type="submit">Let's go!</button>
+    </form>
+  </section>
+
+  <section id="notice" class="screen" hidden>
+    <div class="card join-card" role="alertdialog" aria-labelledby="noticeTitle">
+      <h2 id="noticeTitle" class="text-2xl font-bold"></h2>
+      <p id="noticeText" class="muted mb-3"></p>
+      <button id="noticeBtn" class="btn primary big" type="button"></button>
+    </div>
+  </section>
+
+  <div id="quizSheet" class="sheet" hidden role="dialog" aria-labelledby="quizText">
+    <p id="quizMeta" class="eyebrow"></p>
+    <h2 id="quizText" class="sheet-title"></h2>
+    <div id="quizBody" class="grid gap-2"></div>
+    <p id="quizStatus" class="muted font-semibold" role="status"></p>
+    <button id="quizClose" class="btn ghost" type="button">Back to the map</button>
+  </div>
+
+  <div id="boardSheet" class="sheet" hidden role="dialog" aria-labelledby="boardTitle">
+    <h2 id="boardTitle" class="sheet-title">Leaderboard</h2>
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" data-kind="players" aria-selected="true">Players</button>
+      <button type="button" role="tab" data-kind="groups" aria-selected="false">Groups</button>
+    </div>
+    <ol id="boardList" class="lb"></ol>
+    <button id="boardClose" class="btn ghost" type="button">Close</button>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="js/student.js"></script>
+</body>
+</html>

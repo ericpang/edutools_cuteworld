@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fff8ef">
+  <title>ClassQuest: teacher</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🎓%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="game">
+  <canvas id="world" role="img" aria-label="The class map. Select a character to see their chats."></canvas>
+
+  <header class="top-hud">
+    <div class="flex gap-2 items-center flex-wrap">
+      <span id="codeChip" class="chip code-chip" title="Class code">······</span>
+      <span id="countChip" class="chip">0 students</span>
+      <span id="envChip" class="chip"></span>
+      <span id="quizChip" class="chip" hidden></span>
+    </div>
+    <div class="flex gap-2 items-center">
+      <button id="btnQr" class="btn small ghost" type="button" hidden>Show QR code</button>
+      <button id="btnPanel" class="btn primary" type="button" aria-expanded="false" aria-controls="panel">☰ Controls</button>
+    </div>
+  </header>
+
+  <aside id="qrCard" class="card qr-card" aria-label="Join code">
+    <p class="font-semibold">Scan to join</p>
+    <div id="qr"></div>
+    <div id="qrCode" class="code"></div>
+    <small id="joinUrl"></small>
+    <button id="btnHideQr" class="btn small ghost" type="button">Hide</button>
+  </aside>
+
+  <aside id="panel" class="panel" hidden aria-label="Class controls">
+    <div class="row">
+      <h2 class="grow text-xl font-bold">Controls</h2>
+      <button id="btnClosePanel" class="icon-btn" type="button" aria-label="Close controls">✕</button>
+    </div>
+    <div class="tabs" role="tablist" id="panelTabs">
+      <button type="button" role="tab" data-tab="class" aria-selected="true">Class</button>
+      <button type="button" role="tab" data-tab="groups" aria-selected="false">Groups</button>
+      <button type="button" role="tab" data-tab="quiz" aria-selected="false">Quiz</button>
+      <button type="button" role="tab" data-tab="scores" aria-selected="false">Scores</button>
+      <button type="button" role="tab" data-tab="players" aria-selected="false">Students</button>
+    </div>
+
+    <section data-panel="class">
+      <h3>Map</h3>
+      <div id="envButtons" class="row"></div>
+      <h3>Room</h3>
+      <label class="switch"><span>Let new students join</span><input id="swOpen" type="checkbox"></label>
+      <label class="switch"><span>Allow chat</span><input id="swChat" type="checkbox"></label>
+      <label class="switch"><span>Show chat bubbles on this screen</span><input id="swBubbles" type="checkbox"></label>
+      <p class="muted">Students can only chat when their characters bump into each other. You can always read every chat by selecting a character on the map.</p>
+      <button id="btnCopy" class="btn ghost" type="button">Copy join link</button>
+      <button id="btnEnd" class="btn danger" type="button">End session</button>
+    </section>
+
+    <section data-panel="groups" hidden>
+      <p class="muted">Shuffle everyone into balanced teams. Latecomers join the smallest team.</p>
+      <div class="row">
+        <label for="groupSize" class="font-semibold grow">Students per group</label>
+        <input id="groupSize" class="input" style="width: 96px" type="number" min="2" max="10" value="3">
+      </div>
+      <div class="row">
+        <button id="btnForm" class="btn primary grow" type="button">Form groups</button>
+        <button id="btnClearGroups" class="btn ghost" type="button">Clear</button>
+      </div>
+      <div id="groupList" class="grid gap-2"></div>
+    </section>
+
+    <section data-panel="quiz" hidden>
+      <div id="builder" class="grid gap-3">
+        <div class="field">
+          <label for="qText">Question</label>
+          <textarea id="qText" class="input" maxlength="200" placeholder="What is the capital of France?"></textarea>
+        </div>
+        <div class="row">
+          <span class="font-semibold grow">Answer type</span>
+          <div class="seg" id="qType">
+            <button type="button" data-v="choice" aria-pressed="true">Multiple choice</button>
+            <button type="button" data-v="text" aria-pressed="false">Short text</button>
+          </div>
+        </div>
+        <div id="optBox" class="grid gap-2"></div>
+        <button id="btnAddOpt" type="button" class="btn small ghost">+ Add option</button>
+        <div id="textKeyBox" class="field" hidden>
+          <label for="qKey">Correct answer (optional)</label>
+          <input id="qKey" class="input" maxlength="100" placeholder="paris | the city of light">
+          <small class="muted">Separate several accepted answers with |</small>
+        </div>
+        <div class="row">
+          <span class="font-semibold grow">Who answers</span>
+          <div class="seg" id="qMode">
+            <button type="button" data-v="solo" aria-pressed="true">Each student</button>
+            <button type="button" data-v="group" aria-pressed="false">Groups</button>
+          </div>
+        </div>
+        <p id="builderError" class="error" role="alert" hidden></p>
+        <button id="btnPublish" class="btn primary big" type="button">Send to students</button>
+      </div>
+      <div id="monitor" class="grid gap-3" hidden></div>
+    </section>
+
+    <section data-panel="scores" hidden>
+      <div class="tabs" id="boardTabs" role="tablist">
+        <button type="button" role="tab" data-kind="players" aria-selected="true">Students</button>
+        <button type="button" role="tab" data-kind="groups" aria-selected="false">Groups</button>
+      </div>
+      <ol id="boardList" class="lb"></ol>
+    </section>
+
+    <section data-panel="players" hidden>
+      <div id="playerList" class="grid gap-2"></div>
+    </section>
+  </aside>
+
+  <dialog id="inspector" class="inspector" aria-labelledby="insName">
+    <div class="inspector-body">
+      <div class="row">
+        <img id="insAvatar" alt="" width="48" height="56">
+        <div class="grow">
+          <h2 id="insName" class="text-xl font-bold"></h2>
+          <p id="insMeta" class="muted"></p>
+        </div>
+        <button id="insClose" class="icon-btn" type="button" aria-label="Close">✕</button>
+      </div>
+      <p id="insChatting" class="font-semibold"></p>
+      <h3 class="font-bold">Recent chats</h3>
+      <div id="insTranscript" class="transcript"></div>
+      <div class="row"><button id="insRemove" class="btn danger small" type="button">Remove from class</button></div>
+    </div>
+  </dialog>
+
+  <section id="notice" class="screen" hidden>
+    <div class="card join-card" role="alertdialog" aria-labelledby="noticeTitle">
+      <h2 id="noticeTitle" class="text-2xl font-bold"></h2>
+      <p id="noticeText" class="muted mb-3"></p>
+      <button id="noticeBtn" class="btn primary big" type="button"></button>
+    </div>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script type="module" src="js/admin.js"></script>
+</body>
+</html>
