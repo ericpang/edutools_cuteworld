@@ -46,6 +46,8 @@ export class Room {
   setPos = (x, y) => set(this.ref(`pos/${this.uid}`), { x: Math.round(x), y: Math.round(y) });
   sendChat = (pair, text) => push(this.ref(`chats/${pair}`), { from: this.uid, text, ts: serverTimestamp() });
   answer = (qid, subject, value) => set(this.ref(`quiz/ans/${qid}/${subject}`), { v: String(value), by: this.uid, ts: serverTimestamp() });
+  // One try per treasure box: the rules refuse a second answer.
+  answerChest = (cid, value) => set(this.ref(`treasure/ans/${this.uid}/${cid}`), { v: String(value), ts: serverTimestamp() });
 
   // New messages in one pair's chat (plus the last few already there; callers filter by time).
   watchChat(pair, cb) {
@@ -74,7 +76,7 @@ export class Room {
   end = () => remove(this.ref());
 
   removePlayer = (uid) =>
-    update(this.ref(), { [`players/${uid}`]: null, [`pos/${uid}`]: null, [`group/${uid}`]: null, [`banned/${uid}`]: true });
+    update(this.ref(), { [`players/${uid}`]: null, [`pos/${uid}`]: null, [`group/${uid}`]: null, [`banned/${uid}`]: true, [`treasure/ans/${uid}`]: null, [`treasure/res/${uid}`]: null });
 
   publishQuestion = (question, key) => update(this.ref('quiz'), { cur: question, [`key/${question.id}`]: key ?? null });
   setQuestionState = (state) => set(this.ref('quiz/cur/state'), state);
@@ -86,5 +88,48 @@ export class Room {
     if (answer !== null && answer !== undefined && answer !== '') patch['cur/answer'] = String(answer);
     for (const subject of winners) patch[`score/${subject}`] = increment(1);
     return update(this.ref('quiz'), patch);
+  }
+
+  // ---- treasure boxes (the teacher)
+  // Drop boxes at their spots: [{ x, y, text, type, options?, key }]. The public box and its private key go in together.
+  dropChests(items) {
+    const boxes = this.ref('treasure/chests');
+    const patch = {};
+    for (const { key, ...box } of items) {
+      const id = push(boxes).key; // a fresh id every time, so an old answer can never land on a new box
+      patch[`treasure/chests/${id}`] = box;
+      patch[`treasure/key/${id}`] = key;
+    }
+    return update(this.ref(), patch);
+  }
+
+  // Mark one answer. The result and the point go in together, and the rules refuse a second marking of the same
+  // answer (say, from another teacher tab), so a point can never be awarded twice.
+  gradeChest({ uid, cid, ok, answer }) {
+    const patch = { [`treasure/res/${uid}/${cid}`]: { ok, ...(answer ? { a: answer } : {}) } };
+    if (ok) patch[`quiz/score/${uid}`] = increment(1);
+    return update(this.ref(), patch);
+  }
+
+  // Take a box away with its key and everyone's answers to it (the points already earned stay).
+  removeChest(cid, uids) {
+    const patch = { [`treasure/chests/${cid}`]: null, [`treasure/key/${cid}`]: null };
+    for (const uid of uids) {
+      patch[`treasure/ans/${uid}/${cid}`] = null;
+      patch[`treasure/res/${uid}/${cid}`] = null;
+    }
+    return update(this.ref(), patch);
+  }
+
+  clearChests = () => remove(this.ref('treasure'));
+
+  // Change the map and move the boxes to spots that are clear on it, in one write. `spots` maps box id -> { x, y }.
+  switchMap(env, spots = {}) {
+    const patch = { 'meta/env': env };
+    for (const [cid, p] of Object.entries(spots)) {
+      patch[`treasure/chests/${cid}/x`] = p.x;
+      patch[`treasure/chests/${cid}/y`] = p.y;
+    }
+    return update(this.ref(), patch);
   }
 }

@@ -10,6 +10,7 @@ import { addBubble, pairId, pruneBubbles, trackContacts } from './chat.js';
 import { approach, dist, move, pickSpawn, relocate } from './world.js';
 import { groupColor, groupLabel } from './grouping.js';
 import { isCorrect, leaderboard } from './quiz.js';
+import { OPEN_DIST, REARM_DIST } from './treasure.js';
 import { isCode, normalizeCode } from './codes.js';
 import { $, $$, h, store, toast } from './ui.js';
 
@@ -42,6 +43,17 @@ const S = {
   lastChat: 0,
   running: false,
   unsubs: [],
+  // treasure boxes
+  chests: new Map(), // box id -> { id, x, y, text, type, options, since }
+  boxView: [], // the same boxes as the renderer draws them
+  ans: null, // my answers, box id -> { v } (null until they have loaded: until then I can't tell which boxes I've opened)
+  res: null, // ...and how they were marked, box id -> { ok, a }
+  near: new Set(), // ids of the boxes I'm touching right now
+  told: new Set(), // boxes already announced with a toast
+  boxId: null, // the box whose question is on screen
+  boxSig: '', // what the question sheet last showed, so it only redraws when something changed
+  pick: null, // the option picked but not yet locked in
+  typed: '', // the short answer typed but not yet locked in
 };
 
 // ---------------------------------------------------------------- join screen
@@ -149,6 +161,12 @@ async function enter(profile, pos) {
       S.scores = v ?? {};
       renderBoard();
     }),
+    r.watch('treasure/chests', onChests),
+    r.watch(`treasure/ans/${S.uid}`, (v) => {
+      S.ans = v ?? {};
+      refreshBoxes();
+    }),
+    r.watch(`treasure/res/${S.uid}`, onResults),
   ];
   S.running = true;
   last = performance.now();
@@ -255,6 +273,7 @@ function tick(now) {
   }
 
   updateContacts(now);
+  updateBoxes(now);
   if (now - S.sent.t > 120 && dist(S.pos, S.sent) > 1.5) sendPos(now);
 
   const live = new Set([...S.contacts].map((u) => pairId(S.uid, u)));
@@ -270,7 +289,7 @@ function tick(now) {
     } else if (p.smooth && p.on !== false) players.push({ ...p, x: p.smooth.x, y: p.smooth.y });
   }
   if (!sawMe) players.push({ uid: S.uid, ...S.me, look: look({ uid: S.uid, ...S.me }), x: S.pos.x, y: S.pos.y, facing: S.facing, moving: S.moving });
-  view.draw({ now, dt, players, meId: S.uid, focus: S.pos, bubbles: S.bubbles });
+  view.draw({ now, dt, players, meId: S.uid, focus: S.pos, bubbles: S.bubbles, chests: S.boxView });
   requestAnimationFrame(tick);
 }
 
@@ -356,6 +375,7 @@ syncSound();
 
 $('#btnBoard').addEventListener('click', () => {
   $('#quizSheet').hidden = true;
+  closeChest();
   $('#boardSheet').hidden = !$('#boardSheet').hidden;
   renderBoard();
 });
@@ -396,6 +416,7 @@ function onQuiz(q) {
     sounds.ding();
     toast('New question!');
     $('#boardSheet').hidden = true;
+    closeChest();
     $('#quizSheet').hidden = false;
   }
   $('#btnQuiz').classList.toggle('pulse', q.state === 'open' && S.answer == null);
@@ -468,10 +489,147 @@ function renderQuiz() {
 
 $('#btnQuiz').addEventListener('click', () => {
   $('#boardSheet').hidden = true;
+  closeChest();
   $('#quizSheet').hidden = !$('#quizSheet').hidden;
   renderQuiz();
 });
 $('#quizClose').addEventListener('click', () => ($('#quizSheet').hidden = true));
+
+// ---------------------------------------------------------------- treasure boxes
+// Walk into a box and its question pops up. Each box gives one try; the teacher's page marks the answer, so the key
+// never reaches a phone. Boxes are not solid, so they can never block a path.
+function onChests(v) {
+  const now = performance.now();
+  const next = new Map();
+  for (const [id, c] of Object.entries(v ?? {})) {
+    const before = S.chests.get(id);
+    next.set(id, { ...c, id, since: before && before.x === c.x && before.y === c.y ? before.since : now }); // a box that moved (new map) drops in again
+  }
+  S.chests = next;
+  if (S.boxId && !next.has(S.boxId)) {
+    closeChest();
+    toast('The teacher took that treasure box away.');
+  }
+  refreshBoxes();
+}
+
+function refreshBoxes() {
+  S.boxView = [...S.chests.values()].map((c) => ({ id: c.id, x: c.x, y: c.y, since: c.since, open: !!S.ans?.[c.id] }));
+  if (S.ans) {
+    const fresh = S.boxView.filter((b) => !b.open && !S.told.has(b.id));
+    for (const b of S.boxView) S.told.add(b.id);
+    if (fresh.length) {
+      sounds.ding();
+      toast(fresh.length === 1 ? '🎁 A treasure box is hidden on the map. Bump into it!' : `🎁 ${fresh.length} treasure boxes are hidden on the map. Bump into one!`, 4500);
+    }
+  }
+  if (S.boxId) renderChest();
+}
+
+function onResults(v) {
+  const before = S.res;
+  S.res = v ?? {};
+  for (const [id, r] of Object.entries(S.res)) {
+    if (before === null || before[id]) continue; // the first load, or one I have already heard about
+    if (r.ok) sounds.ding();
+    else sounds.oops();
+    if (S.boxId !== id) toast(r.ok ? '🎉 Correct! +1 point' : 'Not this time. Better luck with the next box!');
+  }
+  if (S.boxId) renderChest();
+}
+
+// A box opens when my avatar touches it, and can open again once I've stepped away from it: the same open/close
+// distances trick the chat uses, so lingering on a box doesn't keep popping it up.
+function updateBoxes(now) {
+  if (S.ans === null) return;
+  const distances = new Map();
+  for (const b of S.boxView) if (!b.open) distances.set(b.id, dist(S.pos, b));
+  const { next, opened } = trackContacts(S.near, distances, OPEN_DIST, REARM_DIST);
+  S.near = next;
+  if (opened.length) openChest(opened[0], now);
+}
+
+function openChest(id, now) {
+  const c = S.chests.get(id);
+  if (!c) return;
+  Object.assign(S, { boxId: id, boxSig: '', pick: null, typed: '' });
+  view.burst(c.x, c.y, now);
+  sounds.chest();
+  navigator.vibrate?.(25);
+  $('#quizSheet').hidden = true;
+  $('#boardSheet').hidden = true;
+  $('#chestSheet').hidden = false;
+  renderChest();
+}
+
+function closeChest() {
+  S.boxId = null;
+  $('#chestSheet').hidden = true;
+}
+
+function lockIn() {
+  const c = S.chests.get(S.boxId);
+  if (!c || S.ans?.[c.id] !== undefined) return;
+  const value = c.type === 'choice' ? S.pick : S.typed.trim();
+  if (value === null || value === '') return;
+  S.room.answerChest(c.id, value).catch(() => toast('That answer didn’t send. Try again.'));
+}
+
+function renderChest() {
+  const c = S.chests.get(S.boxId);
+  if (!c) return;
+  const mine = S.ans?.[c.id]?.v; // my answer, once it is saved
+  const res = S.res?.[c.id]; // ...and how the teacher's page marked it
+  const sig = JSON.stringify([c.text, c.type, c.options, mine, res, S.pick]);
+  if (sig === S.boxSig) return;
+  S.boxSig = sig;
+  const locked = mine !== undefined;
+  const body = $('#chestBody');
+  const refocus = document.activeElement === $('input', body);
+  $('#chestText').textContent = c.text;
+  body.replaceChildren();
+
+  const send = h('button', { class: 'btn primary', type: 'button', disabled: true, onclick: lockIn }, 'Lock in my answer');
+  if (c.type === 'choice') {
+    Object.values(c.options ?? {}).forEach((label, i) => {
+      const right = !!res && String(i) === String(res.a);
+      const wrong = !!res && mine === String(i) && !right;
+      const chosen = locked ? mine === String(i) : S.pick === i;
+      body.append(
+        h('button', { class: `opt${right ? ' correct' : ''}${wrong ? ' wrong' : ''}`, type: 'button', disabled: locked, 'aria-pressed': String(chosen), onclick: () => {
+          S.pick = i;
+          renderChest();
+        } }, h('span', { class: 'letter' }, 'ABCDEF'[i]), label),
+      );
+    });
+    send.disabled = S.pick === null;
+  } else {
+    const input = h('input', { class: 'input', maxlength: 100, placeholder: 'Type your answer', 'aria-label': 'Your answer', disabled: locked });
+    input.value = locked ? mine : S.typed;
+    input.addEventListener('input', () => {
+      S.typed = input.value;
+      send.disabled = !input.value.trim();
+    });
+    input.addEventListener('keydown', (e) => e.key === 'Enter' && !send.disabled && send.click());
+    body.append(input);
+    send.disabled = !input.value.trim();
+    if (refocus) input.focus();
+  }
+  if (!locked) body.append(send);
+
+  let status;
+  if (!locked) status = 'You only get one try, so choose carefully!';
+  else if (!res) status = 'Answer sent! Checking…';
+  else if (res.ok) status = '🎉 Correct! +1 point';
+  else if (c.type === 'text' && res.a) status = `Not this time. The answer was: ${res.a}`;
+  else status = c.type === 'text' ? 'Not this time.' : 'Not this time. The right answer is highlighted.';
+  $('#chestStatus').textContent = status;
+}
+
+$('#chestClose').addEventListener('click', () => {
+  if (S.boxId && S.ans?.[S.boxId] === undefined) toast('Bump into the box again when you’re ready.');
+  closeChest();
+});
 
 // ---------------------------------------------------------------- start
 (async function boot() {

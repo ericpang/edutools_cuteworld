@@ -21,6 +21,7 @@
       <span id="countChip" class="chip">0 students</span>
       <span id="envChip" class="chip"></span>
       <span id="quizChip" class="chip" hidden></span>
+      <span id="treasureChip" class="chip" hidden></span>
     </div>
     <div class="flex gap-2 items-center">
       <button id="btnQr" class="btn small ghost" type="button" hidden>Show QR code</button>
@@ -45,6 +46,7 @@
       <button type="button" role="tab" data-tab="class" aria-selected="true">Class</button>
       <button type="button" role="tab" data-tab="groups" aria-selected="false">Groups</button>
       <button type="button" role="tab" data-tab="quiz" aria-selected="false">Quiz</button>
+      <button type="button" role="tab" data-tab="treasure" aria-selected="false">Treasure</button>
       <button type="button" role="tab" data-tab="scores" aria-selected="false">Scores</button>
       <button type="button" role="tab" data-tab="players" aria-selected="false">Students</button>
     </div>
@@ -105,6 +107,38 @@
         <button id="btnPublish" class="btn primary big" type="button">Send to students</button>
       </div>
       <div id="monitor" class="grid gap-3" hidden></div>
+    </section>
+
+    <section data-panel="treasure" hidden>
+      <p class="muted">Hide a question in each treasure box. Students find a box by walking into it, and get one try at its question.</p>
+      <div id="treasureForm" class="grid gap-3">
+        <div class="field">
+          <label for="tText">Question</label>
+          <textarea id="tText" class="input" maxlength="200" placeholder="How many legs does a spider have?"></textarea>
+        </div>
+        <div class="row">
+          <span class="font-semibold grow">Answer type</span>
+          <div class="seg" id="tType">
+            <button type="button" data-v="choice" aria-pressed="true">Multiple choice</button>
+            <button type="button" data-v="text" aria-pressed="false">Short text</button>
+          </div>
+        </div>
+        <div id="tOptBox" class="grid gap-2"></div>
+        <button id="btnAddTOpt" type="button" class="btn small ghost">+ Add option</button>
+        <div id="tKeyBox" class="field" hidden>
+          <label for="tKey">Correct answer</label>
+          <input id="tKey" class="input" maxlength="100" placeholder="8 | eight">
+          <small class="muted">Separate several accepted answers with |</small>
+        </div>
+        <p id="treasureError" class="error" role="alert" hidden></p>
+        <button id="btnAddBox" class="btn" type="button">Add to the list</button>
+      </div>
+      <h3>Ready to hide</h3>
+      <div id="treasureDraft" class="grid gap-2"></div>
+      <button id="btnDrop" class="btn primary big" type="button" disabled>🎁 Drop treasure boxes</button>
+      <h3>On the map</h3>
+      <div id="treasureLive" class="grid gap-2"></div>
+      <button id="btnCollect" class="btn danger" type="button" hidden>Collect all boxes</button>
     </section>
 
     <section data-panel="scores" hidden>

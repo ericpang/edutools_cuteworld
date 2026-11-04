@@ -8,6 +8,7 @@ import { addBubble, inPair, pairId, partnerOf, pruneBubbles, trackContacts } fro
 import { approach, clamp, dist } from './world.js';
 import { formGroups, groupColor, groupLabel, groupNumber, isGroupId, smallestGroup } from './grouping.js';
 import { MAX_OPTIONS, correctSubjects, leaderboard, tally } from './quiz.js';
+import { MAX_CHESTS, chestProgress, cleanDrafts, scatterChests, ungraded } from './treasure.js';
 import { $, $$, h, store, timeOf, toast } from './ui.js';
 
 const view = new WorldView($('#world'), { follow: false });
@@ -34,10 +35,16 @@ const A = {
   unsubs: [],
   // quiz builder
   building: true,
-  qType: 'choice',
   qMode: 'solo',
-  options: ['', ''],
-  correct: 0,
+  // treasure boxes
+  draft: cleanDrafts(store.get('cq.admin.treasure', [])), // questions written but not dropped yet
+  chests: {}, // boxes on the map: id -> { x, y, text, type, options }
+  seen: new Map(), // box id -> { x, y, since }: where it landed and when, for the drop-in animation
+  boxView: [], // the boxes as the renderer draws them
+  keys: null, // answer keys by box id (null until loaded)
+  given: null, // everyone's answers: uid -> box id -> { v } (null until loaded)
+  marked: null, // ...and how they were marked: uid -> box id -> { ok, a } (null until loaded)
+  marking: new Set(), // "uid/box" answers being marked right now
 };
 
 function notice(title, text, label, action) {
@@ -88,8 +95,8 @@ function start() {
   else qr.textContent = 'QR code unavailable';
 
   buildEnvButtons();
-  buildBuilder();
   renderMonitor();
+  renderTreasure();
   A.unsubs = [
     r.watch('meta', onMeta),
     r.watchChildren('players', { added: onPlayer, changed: onPlayer, removed: onGone }),
@@ -101,6 +108,22 @@ function start() {
       renderBoard();
     }),
     r.watchChildren('chats', { added: onPair }),
+    r.watch('treasure/chests', onChests),
+    r.watch('treasure/key', (v) => {
+      A.keys = v ?? {};
+      markAnswers();
+    }),
+    r.watch('treasure/ans', (v) => {
+      A.given = v ?? {};
+      markAnswers();
+      renderTreasure();
+    }),
+    r.watch('treasure/res', (v) => {
+      const first = A.marked === null;
+      A.marked = v ?? {};
+      if (first) markAnswers(); // not on every change: a refused write rolls back, which would only try it again
+      renderTreasure();
+    }),
   ];
   last = performance.now();
   requestAnimationFrame(tick);
@@ -207,6 +230,7 @@ function renderPeople() {
       : [h('p', { class: 'muted' }, 'Nobody has joined yet. Show them the QR code!')]),
   );
   renderMonitor();
+  renderTreasure();
 }
 
 function removeStudent(p) {
@@ -313,7 +337,7 @@ function tick(now) {
   const links = [...A.pairs].map((pair) => pair.split('_').map((uid) => A.players.get(uid)?.smooth)).filter(([a, b]) => a && b);
   pruneBubbles(A.bubbles, now, (pair) => A.pairs.has(pair));
   const players = named().filter((p) => p.smooth).map((p) => ({ ...p, x: p.smooth.x, y: p.smooth.y }));
-  view.draw({ now, dt, players, links, bubbles: A.meta?.bubbles ? A.bubbles : null, names: true });
+  view.draw({ now, dt, players, links, bubbles: A.meta?.bubbles ? A.bubbles : null, names: true, chests: A.boxView });
   requestAnimationFrame(tick);
 }
 
@@ -345,8 +369,16 @@ $('#btnQr').addEventListener('click', () => {
 
 function buildEnvButtons() {
   $('#envButtons').replaceChildren(
-    ...MAP_IDS.map((id) => h('button', { class: 'btn env-btn', type: 'button', 'data-env': id, 'aria-pressed': 'false', onclick: () => A.room.setMeta({ env: id }).catch(() => toast('Couldn’t change the map.')) }, `${MAPS[id].emoji} ${MAPS[id].label}`)),
+    ...MAP_IDS.map((id) => h('button', { class: 'btn env-btn', type: 'button', 'data-env': id, 'aria-pressed': 'false', onclick: () => switchMap(id) }, `${MAPS[id].emoji} ${MAPS[id].label}`)),
   );
+}
+
+// Treasure boxes were placed on clear ground for the old map, so they move to clear ground on the new one.
+function switchMap(id) {
+  if (id === A.meta?.env) return;
+  const ids = Object.keys(A.chests);
+  const spots = scatterChests(MAPS[id], ids.length);
+  return A.room.switchMap(id, Object.fromEntries(ids.slice(0, spots.length).map((cid, i) => [cid, spots[i]]))).catch(() => toast('Couldn’t change the map.'));
 }
 
 for (const [id, key] of [['#swOpen', 'open'], ['#swChat', 'chat'], ['#swBubbles', 'bubbles']]) {
@@ -385,41 +417,82 @@ async function formNow() {
   }
 }
 
-// ---------------------------------------------------------------- quiz builder
-for (const [id, field] of [['#qType', 'qType'], ['#qMode', 'qMode']]) {
-  for (const btn of $$(`${id} button`)) {
+// ---------------------------------------------------------------- question forms
+// The live quiz and the treasure boxes are written with the same form. `ids` names the elements of one copy of it.
+function questionForm(ids) {
+  const f = { type: 'choice', options: ['', ''], correct: 0 };
+
+  for (const btn of $$(`${ids.type} button`)) {
     btn.addEventListener('click', () => {
-      A[field] = btn.dataset.v;
-      for (const b of $$(`${id} button`)) b.setAttribute('aria-pressed', String(b === btn));
-      buildBuilder();
+      f.type = btn.dataset.v;
+      for (const b of $$(`${ids.type} button`)) b.setAttribute('aria-pressed', String(b === btn));
+      render();
     });
   }
-}
-$('#btnAddOpt').addEventListener('click', () => {
-  if (A.options.length < MAX_OPTIONS) A.options.push('');
-  buildBuilder();
-});
+  $(ids.add).addEventListener('click', () => {
+    if (f.options.length < MAX_OPTIONS) f.options.push('');
+    render();
+  });
 
-function buildBuilder() {
-  $('#optBox').replaceChildren(
-    ...A.options.map((text, i) => {
-      const letter = LETTERS[i];
-      const radio = h('input', { type: 'radio', name: 'correct', class: 'switch-radio', 'aria-label': `Option ${letter} is the correct answer`, checked: A.correct === i, onchange: () => (A.correct = i), style: 'width:24px;height:24px;accent-color:#d6408a;flex:none' });
-      const input = h('input', { class: 'input', maxlength: 80, placeholder: `Option ${letter}`, 'aria-label': `Option ${letter}`, oninput: (e) => (A.options[i] = e.target.value) });
-      input.value = text;
-      const remove = h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Remove option ${letter}`, disabled: A.options.length <= 2, onclick: () => {
-        A.options.splice(i, 1);
-        A.correct = Math.min(A.correct > i ? A.correct - 1 : A.correct, A.options.length - 1);
-        buildBuilder();
-      } }, '✕');
-      return h('div', { class: 'row' }, radio, h('div', { class: 'grow' }, input), remove);
-    }),
-  );
-  const choice = A.qType === 'choice';
-  $('#optBox').hidden = !choice;
-  $('#btnAddOpt').hidden = !choice;
-  $('#btnAddOpt').disabled = A.options.length >= MAX_OPTIONS;
-  $('#textKeyBox').hidden = choice;
+  function render() {
+    $(ids.options).replaceChildren(
+      ...f.options.map((text, i) => {
+        const letter = LETTERS[i];
+        const radio = h('input', { type: 'radio', name: ids.radio, class: 'switch-radio', 'aria-label': `Option ${letter} is the correct answer`, checked: f.correct === i, onchange: () => (f.correct = i), style: 'width:24px;height:24px;accent-color:#d6408a;flex:none' });
+        const input = h('input', { class: 'input', maxlength: 80, placeholder: `Option ${letter}`, 'aria-label': `Option ${letter}`, oninput: (e) => (f.options[i] = e.target.value) });
+        input.value = text;
+        const remove = h('button', { type: 'button', class: 'icon-btn', 'aria-label': `Remove option ${letter}`, disabled: f.options.length <= 2, onclick: () => {
+          f.options.splice(i, 1);
+          f.correct = Math.min(f.correct > i ? f.correct - 1 : f.correct, f.options.length - 1);
+          render();
+        } }, '✕');
+        return h('div', { class: 'row' }, radio, h('div', { class: 'grow' }, input), remove);
+      }),
+    );
+    const choice = f.type === 'choice';
+    $(ids.options).hidden = !choice;
+    $(ids.add).hidden = !choice;
+    $(ids.add).disabled = f.options.length >= MAX_OPTIONS;
+    $(ids.keyBox).hidden = choice;
+  }
+
+  // The question as typed, { text, type, options?, key }, or { error } if the form isn't ready.
+  // A short-text question may go without a correct answer (it is then not scored) unless `needKey` says it can't.
+  function read({ needKey = false } = {}) {
+    const text = $(ids.text).value.trim();
+    if (!text) return { error: 'Type the question first.' };
+    if (f.type === 'choice') {
+      const options = f.options.map((o) => o.trim());
+      if (options.some((o) => !o)) return { error: 'Fill in every option, or remove the empty ones.' };
+      return { text, type: 'choice', options, key: String(f.correct) };
+    }
+    const key = $(ids.key).value.trim();
+    if (needKey && !key) return { error: 'Type the correct answer, so the box can check it.' };
+    return { text, type: 'text', key: key || null };
+  }
+
+  // Empty the form for the next question, keeping the answer type.
+  function reset() {
+    $(ids.text).value = '';
+    $(ids.key).value = '';
+    f.options = ['', ''];
+    f.correct = 0;
+    render();
+  }
+
+  render();
+  return { read, reset };
+}
+
+const quizForm = questionForm({ text: '#qText', type: '#qType', options: '#optBox', add: '#btnAddOpt', keyBox: '#textKeyBox', key: '#qKey', radio: 'correct' });
+const treasureForm = questionForm({ text: '#tText', type: '#tType', options: '#tOptBox', add: '#btnAddTOpt', keyBox: '#tKeyBox', key: '#tKey', radio: 'treasureCorrect' });
+
+// ---------------------------------------------------------------- quiz builder
+for (const btn of $$('#qMode button')) {
+  btn.addEventListener('click', () => {
+    A.qMode = btn.dataset.v;
+    for (const b of $$('#qMode button')) b.setAttribute('aria-pressed', String(b === btn));
+  });
 }
 
 $('#btnPublish').addEventListener('click', async () => {
@@ -429,18 +502,11 @@ $('#btnPublish').addEventListener('click', async () => {
     error.hidden = false;
   };
   error.hidden = true;
-  const text = $('#qText').value.trim();
-  if (!text) return fail('Type the question first.');
-  let options;
-  let key = null;
-  if (A.qType === 'choice') {
-    options = A.options.map((o) => o.trim());
-    if (options.some((o) => !o)) return fail('Fill in every option, or remove the empty ones.');
-    key = String(A.correct);
-  } else key = $('#qKey').value.trim() || null;
+  const { error: problem, key, ...fields } = quizForm.read();
+  if (problem) return fail(problem);
   if (A.qMode === 'group' && !Object.keys(A.groups).length && !(await formNow())) return fail('Groups need at least two students. Wait for more to join.');
   const n = (Number(A.quiz?.id?.slice(1)) || 0) + 1;
-  const question = { id: `q${n}`, text, type: A.qType, mode: A.qMode, state: 'open', ts: Date.now(), ...(options ? { options } : {}) };
+  const question = { id: `q${n}`, ...fields, mode: A.qMode, state: 'open', ts: Date.now() };
   try {
     await A.room.publishQuestion(question, key);
     A.building = false;
@@ -550,3 +616,125 @@ function renderBoard() {
 }
 
 $('#btnPublish').closest('section').addEventListener('input', () => ($('#builderError').hidden = true));
+
+// ---------------------------------------------------------------- treasure boxes
+// Write some questions, then one click hides a box with a question in it at a random clear spot on the map for each.
+// Students answer by walking into a box. This page marks each answer as it arrives (the answer key never leaves this
+// side) and gives the point, so it has to stay open during the hunt, like everything else the teacher's page does.
+const saveDraft = () => store.set('cq.admin.treasure', A.draft);
+
+$('#btnAddBox').addEventListener('click', () => {
+  const error = $('#treasureError');
+  const fail = (message) => {
+    error.textContent = message;
+    error.hidden = false;
+  };
+  error.hidden = true;
+  const q = treasureForm.read({ needKey: true });
+  if (q.error) return fail(q.error);
+  if (Object.keys(A.chests).length + A.draft.length >= MAX_CHESTS) return fail(`The map holds at most ${MAX_CHESTS} treasure boxes at a time.`);
+  A.draft.push(q);
+  saveDraft();
+  treasureForm.reset();
+  renderTreasure();
+});
+$('#treasureForm').addEventListener('input', () => ($('#treasureError').hidden = true));
+
+$('#btnDrop').addEventListener('click', async () => {
+  if (!A.draft.length) return;
+  if (Object.keys(A.chests).length + A.draft.length > MAX_CHESTS) return toast(`The map holds at most ${MAX_CHESTS} boxes: collect some, or take questions off the list.`, 4500);
+  const spots = scatterChests(MAPS[A.meta?.env] ?? MAPS.school, A.draft.length, Object.values(A.chests));
+  if (spots.length < A.draft.length) return toast('There isn’t room for that many boxes on this map.');
+  try {
+    await A.room.dropChests(A.draft.map((q, i) => ({ ...q, ...spots[i] })));
+    A.draft = [];
+    saveDraft();
+    renderTreasure();
+    toast('Treasure dropped! Students can go and find it.');
+  } catch (err) {
+    toast(err?.code === 'PERMISSION_DENIED' ? 'The database refused the treasure. Deploy the updated database.rules.json, then try again.' : 'Couldn’t drop the treasure. Try again.', 6000);
+  }
+});
+
+$('#btnCollect').addEventListener('click', () => {
+  if (!confirm('Collect all the treasure boxes? Students’ answers to them are cleared, but the points they earned stay.')) return;
+  A.room.clearChests().catch(() => toast('Couldn’t collect the boxes. Try again.'));
+});
+
+function removeBox(id) {
+  if (!confirm('Take this treasure box away? Students’ answers to it are cleared, but the points they earned stay.')) return;
+  const uids = new Set([...Object.keys(A.given ?? {}), ...Object.keys(A.marked ?? {})]);
+  A.room.removeChest(id, [...uids]).catch(() => toast('Couldn’t take that box away. Try again.'));
+}
+
+function onChests(v) {
+  const now = performance.now();
+  A.chests = v ?? {};
+  for (const [id, c] of Object.entries(A.chests)) {
+    const was = A.seen.get(id);
+    if (!was || was.x !== c.x || was.y !== c.y) A.seen.set(id, { x: c.x, y: c.y, since: now }); // a new box, or one moved to a new map, drops in
+  }
+  for (const id of A.seen.keys()) if (!A.chests[id]) A.seen.delete(id);
+  markAnswers();
+  renderTreasure();
+}
+
+// Mark every answer that hasn't been marked yet. Nothing is marked until the boxes, keys, answers and results have all
+// loaded, so a refreshed page can't mark an answer that was already marked. A second marking would be refused anyway.
+function markAnswers() {
+  if (!A.keys || !A.given || !A.marked) return;
+  for (const job of ungraded(A.chests, A.keys, A.given, A.marked)) {
+    const id = `${job.uid}/${job.cid}`;
+    if (A.marking.has(id)) continue;
+    A.marking.add(id);
+    A.room.gradeChest(job).catch(() => {}).finally(() => A.marking.delete(id));
+  }
+}
+
+function renderTreasure() {
+  const ids = Object.keys(A.chests);
+  const here = named().map((p) => p.uid);
+
+  $('#treasureDraft').replaceChildren(
+    ...(A.draft.length
+      ? A.draft.map((q, i) =>
+          h('div', { class: 'person' },
+            h('span', { class: 'name', title: q.text }, q.text),
+            h('span', { class: 'group-chip' }, q.type === 'choice' ? 'Choice' : 'Text'),
+            h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Take “${q.text}” off the list`, onclick: () => {
+              A.draft.splice(i, 1);
+              saveDraft();
+              renderTreasure();
+            } }, 'Remove'),
+          ),
+        )
+      : [h('p', { class: 'muted' }, 'Nothing yet. Write a question above and add it to the list.')]),
+  );
+  const drop = $('#btnDrop');
+  drop.disabled = !A.draft.length;
+  drop.textContent = A.draft.length ? `🎁 Drop ${A.draft.length} treasure box${A.draft.length === 1 ? '' : 'es'}` : '🎁 Drop treasure boxes';
+
+  const progress = new Map(ids.map((id) => [id, chestProgress(id, here, A.given, A.marked)]));
+  $('#treasureLive').replaceChildren(
+    ...(ids.length
+      ? ids.map((id) => {
+          const { answered, correct } = progress.get(id);
+          const text = A.chests[id].text;
+          return h('div', { class: 'box-row' },
+            h('div', { class: 'row' },
+              h('span', { class: 'name', title: text }, text),
+              h('button', { class: 'btn small danger', type: 'button', 'aria-label': `Take away the box “${text}”`, onclick: () => removeBox(id) }, 'Remove'),
+            ),
+            h('div', { class: 'bar' }, h('i', { style: `width: ${here.length ? (answered / here.length) * 100 : 0}%` }), h('span', {}, `${answered}/${here.length} answered · ${correct} right`)),
+          );
+        })
+      : [h('p', { class: 'muted' }, 'No boxes on the map right now.')]),
+  );
+  $('#btnCollect').hidden = !ids.length;
+
+  A.boxView = ids.map((id) => ({ id, x: A.chests[id].x, y: A.chests[id].y, since: A.seen.get(id)?.since ?? 0, open: false, count: progress.get(id).answered }));
+  const answers = [...progress.values()].reduce((sum, p) => sum + p.answered, 0);
+  const chip = $('#treasureChip');
+  chip.hidden = !ids.length;
+  chip.textContent = `🎁 ${ids.length} box${ids.length === 1 ? '' : 'es'} · ${answers} answer${answers === 1 ? '' : 's'}`;
+}

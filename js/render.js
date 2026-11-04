@@ -9,6 +9,16 @@ const SPRITE_W = (SPRITE_H * 72) / 84;
 const FOLLOW_WIDTH = 560; // map units across a phone screen
 const INK = '#5b4a6b';
 const FAMILY = 'Fredoka, ui-rounded, system-ui, sans-serif';
+const DROP_MS = 900; // how long a new treasure box takes to fall in and settle
+const DROP_HEIGHT = 240; // map units it falls from
+
+// Ease-out bounce: 0 -> 1 with a few rebounds, so a dropped box lands, hops and settles.
+function bounce(t) {
+  if (t < 1 / 2.75) return 7.5625 * t * t;
+  if (t < 2 / 2.75) return 7.5625 * (t -= 1.5 / 2.75) * t + 0.75;
+  if (t < 2.5 / 2.75) return 7.5625 * (t -= 2.25 / 2.75) * t + 0.9375;
+  return 7.5625 * (t -= 2.625 / 2.75) * t + 0.984375;
+}
 
 function roundedRect(ctx, x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);
@@ -47,6 +57,115 @@ function wrap(ctx, text, maxWidth, maxLines) {
     lines[maxLines - 1] = `${lines[maxLines - 1].replace(/.$/, '')}…`;
   }
   return lines;
+}
+
+// A four-point twinkle centred on (x, y).
+function sparkle(ctx, x, y, r) {
+  ctx.beginPath();
+  ctx.moveTo(x, y - r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.quadraticCurveTo(x, y, x, y + r);
+  ctx.quadraticCurveTo(x, y, x - r, y);
+  ctx.quadraticCurveTo(x, y, x, y - r);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// The treasure box sprite, in map units around (0, 0): about 38 wide and 36 tall, resting on y = 14.
+// The caller has set the outline colour and width; `phase` staggers the glow so neighbouring boxes don't pulse in step.
+function paintChest(ctx, open, now, phase) {
+  const line = ctx.lineWidth;
+  const thin = Math.max(1.4, line * 0.55);
+  const gold = '#ffd54f';
+
+  if (open) {
+    roundedRect(ctx, -17, -30, 34, 17, 6); // the lid, standing open behind the box
+    ctx.fillStyle = '#8a5a2b';
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    const glow = ctx.createRadialGradient(0, -4, 4, 0, -4, 46);
+    glow.addColorStop(0, `rgba(255,213,79,${0.4 + (0.5 + 0.5 * Math.sin(now / 380 + phase)) * 0.3})`);
+    glow.addColorStop(1, 'rgba(255,213,79,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(0, -4, 46, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  roundedRect(ctx, -19, -4, 38, 18, 4); // the box itself, with two plank lines
+  ctx.fillStyle = '#c98a4b';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(91,58,26,.4)';
+  ctx.lineWidth = thin;
+  for (const px of [-6, 6]) {
+    ctx.beginPath();
+    ctx.moveTo(px, -2);
+    ctx.lineTo(px, 12);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = line;
+  roundedRect(ctx, -19, -4, 38, 18, 4);
+  ctx.stroke();
+
+  if (open) {
+    ctx.beginPath(); // the dark inside, a heap of gold and a few coins on top
+    ctx.ellipse(0, -4, 17, 5.5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#4a2c12';
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(0, -6, 13, 4.5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = gold;
+    ctx.fill();
+    ctx.lineWidth = thin;
+    ctx.fillStyle = '#ffe680';
+    for (const [cx, cy] of [[-7, -9], [1, -11], [8, -8]]) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, 3.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.lineWidth = line;
+    return;
+  }
+
+  ctx.beginPath(); // the domed lid
+  ctx.moveTo(-19, -3);
+  ctx.quadraticCurveTo(-19, -22, 0, -22);
+  ctx.quadraticCurveTo(19, -22, 19, -3);
+  ctx.closePath();
+  ctx.fillStyle = '#e0a860';
+  ctx.fill();
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,.6)';
+  ctx.lineWidth = thin * 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-13, -11);
+  ctx.quadraticCurveTo(-12, -17, -5, -18);
+  ctx.stroke();
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = line;
+  roundedRect(ctx, -19, -7, 38, 7, 2); // the gold band round the seam, with a lock
+  ctx.fillStyle = gold;
+  ctx.fill();
+  ctx.stroke();
+  roundedRect(ctx, -5, -9, 10, 11, 3);
+  ctx.fillStyle = '#ffe680';
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = INK;
+  ctx.beginPath();
+  ctx.arc(0, -4.5, 1.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(-0.8, -4.5, 1.6, 4);
+
+  ctx.fillStyle = '#fffbe0'; // twinkles that come and go
+  [[-24, -20, 5], [23, -14, 4], [3, -33, 5]].forEach(([tx, ty, r], i) => {
+    const k = Math.max(0, Math.sin(now / 420 + phase + i * 2.1));
+    if (k > 0.05) sparkle(ctx, tx, ty, r * k);
+  });
 }
 
 export class WorldView {
@@ -123,7 +242,8 @@ export class WorldView {
   }
 
   // frame: { now, dt, players: [{uid, name, persona, color, group, on, x, y, facing, moving, look?}], meId, focus,
-  //          bubbles: Map(uid -> [{text}]), links: [[a, b]], names }
+  //          bubbles: Map(uid -> [{text}]), links: [[a, b]], names,
+  //          chests: [{ id, x, y, since, open, count? }]  (`since` is when the box dropped; `count` adds a badge) }
   draw(f) {
     const { ctx, dpr, scale } = this;
     const vw = this.cw / scale;
@@ -158,6 +278,7 @@ export class WorldView {
       ctx.drawImage(this.bg, x0 * rs, y0 * rs, w * rs, h * rs, ox, oy, w * scale, h * scale);
     }
 
+    for (const c of f.chests ?? []) this.drawChest(ctx, c, sx(c.x), sy(c.y), scale, f.now);
     for (const [a, b] of f.links ?? []) this.drawLink(ctx, sx(a.x), sy(a.y), sx(b.x), sy(b.y), scale, f.now);
 
     const players = [...f.players].sort((a, b) => a.y - b.y);
@@ -170,6 +291,46 @@ export class WorldView {
       if (list?.length) this.drawBubbles(ctx, list, sx(p.x), sy(p.y) + AVATAR_R * 0.9 * scale - SPRITE_H * scale - font - 14, font, p.uid === f.meId);
     }
     if (this.minimap && this.bg) this.drawMinimap(ctx, f, vw, vh);
+  }
+
+  // A treasure box lying on the ground (it is not solid: walking into it opens it). Closed boxes glow and twinkle;
+  // opened ones sit open with their gold showing. A box with a `count` gets a badge: how many students have answered it.
+  drawChest(ctx, c, x, y, s, now) {
+    const lift = 1 - bounce(clamp((now - c.since) / DROP_MS, 0, 1)); // 1 = high up, 0 = on the ground
+    const top = y - lift * DROP_HEIGHT * s;
+    if (x < -70 || x > this.cw + 70 || top < -70 - 40 * s || y > this.ch + 70) return;
+    ctx.save();
+    ctx.fillStyle = `rgba(45,27,78,${0.2 - lift * 0.12})`;
+    ctx.beginPath();
+    ctx.ellipse(x, y + 15 * s, (24 - lift * 8) * s, 7 * s, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.translate(x, top);
+    ctx.scale(s, s); // from here on, drawing is in map units with the box's centre at the origin
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(2.5, 1.6 / s);
+    ctx.strokeStyle = INK;
+    paintChest(ctx, c.open, now, c.x * 0.05);
+    ctx.restore();
+    if (c.count != null) {
+      const font = clamp(11 * s + 5, 12, 17);
+      const text = String(c.count);
+      ctx.save();
+      ctx.font = `700 ${font}px ${FAMILY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const w = Math.max(font + 8, ctx.measureText(text).width + 14);
+      const bx = x + 21 * s;
+      const by = top - 25 * s;
+      roundedRect(ctx, bx - w / 2, by - (font + 6) / 2, w, font + 6, (font + 6) / 2);
+      ctx.fillStyle = c.count ? '#c9f5e5' : '#fff';
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = INK;
+      ctx.stroke();
+      ctx.fillStyle = INK;
+      ctx.fillText(text, bx, by + 1);
+      ctx.restore();
+    }
   }
 
   drawBody(ctx, p, x, y, s, now, isMe) {
@@ -366,6 +527,17 @@ export class WorldView {
     ctx.globalAlpha = 0.92;
     ctx.drawImage(this.bg, 0, 0, this.bg.width, this.bg.height, x, y, w, h);
     ctx.globalAlpha = 1;
+    const pulse = 1 + 0.3 * Math.sin(f.now / 260);
+    for (const c of f.chests ?? []) {
+      if (c.open) continue; // boxes this student has already opened are not worth looking for
+      ctx.beginPath();
+      ctx.rect(x + c.x * k - 3.5 * pulse, y + c.y * k - 3.5 * pulse, 7 * pulse, 7 * pulse);
+      ctx.fillStyle = '#ffd54f';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = INK;
+      ctx.stroke();
+    }
     for (const p of f.players) {
       if (p.on === false) continue;
       const me = p.uid === f.meId;
@@ -385,5 +557,26 @@ export class WorldView {
     ctx.lineWidth = 3;
     ctx.strokeStyle = INK;
     ctx.stroke();
+
+    // how many boxes are still waiting to be found
+    const boxes = f.chests ?? [];
+    if (boxes.length) {
+      const left = boxes.filter((c) => !c.open).length;
+      ctx.save();
+      ctx.font = `600 13px ${FAMILY}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const label = left ? `🎁 ${left} left` : '🎁 All found!';
+      const pw = ctx.measureText(label).width + 18;
+      roundedRect(ctx, x + w - pw, y + h + 6, pw, 24, 12);
+      ctx.fillStyle = left ? '#fff3a8' : '#c9f5e5';
+      ctx.fill();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = INK;
+      ctx.stroke();
+      ctx.fillStyle = INK;
+      ctx.fillText(label, x + w - pw / 2, y + h + 19);
+      ctx.restore();
+    }
   }
 }

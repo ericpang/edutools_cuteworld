@@ -361,6 +361,49 @@
           },
           "$other": { ".validate": false }
         },
+        "treasure": {
+          "chests": {
+            ".read": "auth != null",
+            "$cid": {
+              ".validate": "$cid.matches(/^[A-Za-z0-9_-]{1,24}$/) && newData.hasChildren(['x', 'y', 'text', 'type'])",
+              "x": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1920" },
+              "y": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 1080" },
+              "text": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 200" },
+              "type": { ".validate": "newData.val() === 'choice' || newData.val() === 'text'" },
+              "options": {
+                "$i": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 80" }
+              },
+              "$other": { ".validate": false }
+            }
+          },
+          "key": {
+            "$cid": { ".validate": "newData.isString() && newData.val().length <= 200" }
+          },
+          "ans": {
+            "$uid": {
+              ".read": "auth != null && auth.uid === $uid",
+              "$cid": {
+                ".write": "auth != null && auth.uid === $uid && !data.exists() && root.child('worlds/' + $code + '/treasure/chests/' + $cid).exists() && root.child('worlds/' + $code + '/players/' + $uid).exists()",
+                ".validate": "newData.hasChildren(['v', 'ts'])",
+                "v": { ".validate": "newData.isString() && newData.val().length <= 200" },
+                "ts": { ".validate": "newData.val() === now" },
+                "$other": { ".validate": false }
+              }
+            }
+          },
+          "res": {
+            "$uid": {
+              ".read": "auth != null && auth.uid === $uid",
+              "$cid": {
+                ".validate": "!data.exists() && newData.hasChild('ok')",
+                "ok": { ".validate": "newData.isBoolean()" },
+                "a": { ".validate": "newData.isString() && newData.val().length <= 200" },
+                "$other": { ".validate": false }
+              }
+            }
+          },
+          "$other": { ".validate": false }
+        },
         "$other": { ".validate": false }
       }
     }

@@ -65,5 +65,16 @@ export function createSounds() {
         blip({ from: 660, to: 660, dur: 0.18, level: 0.2 });
         blip({ from: 990, to: 990, at: 0.12, dur: 0.3, level: 0.2 });
       }),
+    // a treasure box opens: four quick notes climbing
+    chest: () =>
+      play(() => {
+        [523, 659, 784, 1047].forEach((hz, i) => blip({ from: hz, to: hz * 1.03, at: i * 0.07, dur: 0.2, type: 'triangle', level: 0.16 }));
+      }),
+    // a wrong answer: two soft notes stepping down
+    oops: () =>
+      play(() => {
+        blip({ from: 330, to: 262, dur: 0.22, type: 'triangle', level: 0.18 });
+        blip({ from: 247, to: 196, at: 0.14, dur: 0.3, type: 'triangle', level: 0.16 });
+      }),
   };
 }

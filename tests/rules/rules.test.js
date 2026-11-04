@@ -1,8 +1,9 @@
 // Security-rules tests for the `worlds` block. They need the Firebase emulator: `npm run test:rules`.
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test, before, after, beforeEach } from 'node:test';
 import { assertFails, assertSucceeds, initializeTestEnvironment } from '@firebase/rules-unit-testing';
-import { get, ref, remove, serverTimestamp, set, update } from 'firebase/database';
+import { get, increment, ref, remove, serverTimestamp, set, update } from 'firebase/database';
 
 const CODE = 'ABC234';
 let env;
@@ -236,6 +237,144 @@ test('scores are public to read and only the teacher writes them', async () => {
 test('the teacher can reveal an answer in one atomic update', async () => {
   await seedRoom({ quiz: question() });
   await assertSucceeds(update(at(db('teacher'), 'quiz'), { 'cur/state': 'revealed', 'cur/answer': '0', 'score/alice': 1 }));
+});
+
+// ---- treasure boxes
+const chest = (over = {}) => ({ x: 300, y: 400, text: 'Capital of France?', type: 'choice', options: ['Paris', 'Rome'], ...over });
+const answer = (v = '0') => ({ v, ts: serverTimestamp() });
+
+// A class with one box (key: option 0) lying on the map.
+async function seedTreasure() {
+  await seedRoom();
+  await seed((d) => update(at(d, 'treasure'), { 'chests/c1': chest(), 'key/c1': '0' }));
+}
+
+test('students see the boxes but never the answer keys', async () => {
+  await seedTreasure();
+  await assertSucceeds(get(at(db('alice'), 'treasure/chests')));
+  await assertFails(get(at(db('alice'), 'treasure/key')));
+  await assertFails(get(at(db('alice'), 'treasure/key/c1')));
+  await assertSucceeds(get(at(db('teacher'), 'treasure/key')));
+  await assertFails(get(at(env.unauthenticatedContext().database(), 'treasure/chests')));
+});
+
+test('only the teacher drops boxes, and drops them with their keys in one update', async () => {
+  await seedRoom();
+  await assertSucceeds(update(at(db('teacher')), { 'treasure/chests/c1': chest(), 'treasure/key/c1': '0', 'treasure/chests/c2': chest({ type: 'text', options: null }), 'treasure/key/c2': 'paris | the city of light' }));
+  await assertFails(set(at(db('alice'), 'treasure/chests/c3'), chest()));
+  await assertFails(set(at(db('alice'), 'treasure/key/c3'), '0'));
+  await assertFails(set(at(db('alice'), 'treasure/chests/c1/x'), 10));
+  await assertFails(remove(at(db('alice'), 'treasure/chests/c1')));
+});
+
+test('boxes are validated: on the map, a known question type, a sensible id and nothing extra', async () => {
+  await seedRoom();
+  const drop = (id, value) => set(at(db('teacher'), `treasure/chests/${id}`), value);
+  await assertFails(drop('c1', chest({ x: 2000 })));
+  await assertFails(drop('c1', chest({ y: -5 })));
+  await assertFails(drop('c1', chest({ type: 'essay' })));
+  await assertFails(drop('c1', chest({ text: '' })));
+  await assertFails(drop('c1', chest({ text: 'x'.repeat(201) })));
+  await assertFails(drop('c1', chest({ options: ['Paris', ''] })));
+  await assertFails(drop('c1', { ...chest(), loot: 'gold' }));
+  await assertFails(drop('has space', chest()));
+  await assertFails(drop('x'.repeat(25), chest()));
+  await assertSucceeds(drop('-OAbc_9-xyZ', chest()));
+});
+
+test('a student answers a box once, as themselves', async () => {
+  await seedTreasure();
+  await assertSucceeds(set(at(db('alice'), 'treasure/ans/alice/c1'), answer('0')));
+  await assertFails(set(at(db('alice'), 'treasure/ans/alice/c1'), answer('1'))); // no second try
+  await assertFails(remove(at(db('alice'), 'treasure/ans/alice/c1'))); // ...and no taking it back
+  await assertFails(set(at(db('alice'), 'treasure/ans/bob/c1'), answer('0'))); // not for someone else
+  await assertSucceeds(set(at(db('bob'), 'treasure/ans/bob/c1'), answer('1'))); // each student has their own try
+});
+
+test('an answer needs a real box, the server clock and nothing extra', async () => {
+  await seedTreasure();
+  await assertFails(set(at(db('alice'), 'treasure/ans/alice/c9'), answer())); // there is no box c9
+  await assertFails(set(at(db('alice'), 'treasure/ans/alice/c1'), { v: '0', ts: 12345 }));
+  await assertFails(set(at(db('alice'), 'treasure/ans/alice/c1'), { v: 'x'.repeat(201), ts: serverTimestamp() }));
+  await assertFails(set(at(db('alice'), 'treasure/ans/alice/c1'), { ...answer(), ok: true })); // students cannot mark themselves
+  await assertFails(set(at(db('alice'), 'treasure/ans/alice/c1'), { v: 0, ts: serverTimestamp() }));
+});
+
+test('someone who is not in the class (or was removed) cannot answer', async () => {
+  await seedTreasure();
+  await assertFails(set(at(db('dave'), 'treasure/ans/dave/c1'), answer()));
+  await assertSucceeds(update(at(db('teacher')), { 'players/bob': null, 'pos/bob': null, 'banned/bob': true }));
+  await assertFails(set(at(db('bob'), 'treasure/ans/bob/c1'), answer()));
+});
+
+test('students read only their own answers and results, the teacher reads everyone\'s', async () => {
+  await seedTreasure();
+  await seed((d) => update(at(d, 'treasure'), { 'ans/alice/c1': { v: '0', ts: 1 }, 'ans/bob/c1': { v: '1', ts: 1 }, 'res/alice/c1': { ok: true, a: '0' } }));
+  await assertSucceeds(get(at(db('alice'), 'treasure/ans/alice')));
+  await assertSucceeds(get(at(db('alice'), 'treasure/res/alice')));
+  await assertFails(get(at(db('alice'), 'treasure/ans/bob')));
+  await assertFails(get(at(db('alice'), 'treasure/res/bob')));
+  await assertFails(get(at(db('alice'), 'treasure/ans')));
+  await assertFails(get(at(db('alice'), 'treasure/res')));
+  await assertSucceeds(get(at(db('teacher'), 'treasure/ans')));
+  await assertSucceeds(get(at(db('teacher'), 'treasure/res')));
+});
+
+test('only the teacher marks answers, and a result and its point go in together', async () => {
+  await seedTreasure();
+  await seed((d) => set(at(d, 'treasure/ans/alice/c1'), { v: '0', ts: 1 }));
+  await assertFails(set(at(db('alice'), 'treasure/res/alice/c1'), { ok: true })); // students cannot mark themselves
+  await assertFails(set(at(db('alice'), 'quiz/score/alice'), 5));
+  await assertSucceeds(update(at(db('teacher')), { 'treasure/res/alice/c1': { ok: true, a: '0' }, 'quiz/score/alice': increment(1) }));
+  assert.equal((await get(at(db('alice'), 'quiz/score/alice'))).val(), 1);
+});
+
+test('an answer is marked only once, so a second teacher tab cannot double the points', async () => {
+  await seedTreasure();
+  await seed((d) => set(at(d, 'treasure/ans/alice/c1'), { v: '0', ts: 1 }));
+  const mark = () => update(at(db('teacher')), { 'treasure/res/alice/c1': { ok: true, a: '0' }, 'quiz/score/alice': increment(1) });
+  await assertSucceeds(mark());
+  await assertFails(mark());
+  assert.equal((await get(at(db('teacher'), 'quiz/score/alice'))).val(), 1);
+});
+
+test('results are validated', async () => {
+  await seedTreasure();
+  const mark = (value) => set(at(db('teacher'), 'treasure/res/alice/c1'), value);
+  await assertFails(mark({ ok: 'yes' }));
+  await assertFails(mark({ a: '0' }));
+  await assertFails(mark({ ok: true, a: 'x'.repeat(201) }));
+  await assertFails(mark({ ok: true, bonus: 10 }));
+  await assertSucceeds(mark({ ok: false, a: '0' }));
+});
+
+test('the teacher can move the boxes when the map changes, but not off the map', async () => {
+  await seedTreasure();
+  await assertSucceeds(update(at(db('teacher')), { 'meta/env': 'jungle', 'treasure/chests/c1/x': 900, 'treasure/chests/c1/y': 500 }));
+  await assertFails(update(at(db('teacher')), { 'treasure/chests/c1/x': 5000 }));
+  await assertFails(update(at(db('alice')), { 'treasure/chests/c1/x': 100 }));
+});
+
+test('the teacher can take a box away with its key and everyone\'s answers, or clear the lot', async () => {
+  await seedTreasure();
+  await seed((d) => update(at(d, 'treasure'), { 'ans/alice/c1': { v: '0', ts: 1 }, 'res/alice/c1': { ok: true } }));
+  await assertSucceeds(update(at(db('teacher')), { 'treasure/chests/c1': null, 'treasure/key/c1': null, 'treasure/ans/alice/c1': null, 'treasure/res/alice/c1': null }));
+  assert.equal((await get(at(db('teacher'), 'treasure'))).val(), null);
+  await seedTreasure();
+  await assertFails(remove(at(db('alice'), 'treasure')));
+  await assertSucceeds(remove(at(db('teacher'), 'treasure')));
+});
+
+test('removing a student can take their treasure answers with them', async () => {
+  await seedTreasure();
+  await seed((d) => update(at(d, 'treasure'), { 'ans/bob/c1': { v: '1', ts: 1 }, 'res/bob/c1': { ok: false } }));
+  await assertSucceeds(update(at(db('teacher')), { 'players/bob': null, 'pos/bob': null, 'group/bob': null, 'banned/bob': true, 'treasure/ans/bob': null, 'treasure/res/bob': null }));
+  assert.equal((await get(at(db('teacher'), 'treasure/ans/bob'))).val(), null);
+});
+
+test('unknown data under treasure is rejected', async () => {
+  await seedTreasure();
+  await assertFails(set(at(db('teacher'), 'treasure/loot'), { a: 1 }));
 });
 
 // ---- ending the session
